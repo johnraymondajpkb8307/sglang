@@ -1,0 +1,78 @@
+name: Build sgl-kernel
+
+on:
+  workflow_dispatch:
+    inputs:
+      cuda_version:
+        description: 'CUDA version'
+        default: '12.6'
+        type: choice
+        options: ['12.4', '12.6', '12.8', '12.9']
+      python_version:
+        description: 'Python version'
+        default: '3.10'
+      arch_list:
+        description: 'CUDA architectures (e.g. 9.0 for Hopper only)'
+        default: '8.0 8.9 9.0+PTX'
+
+concurrency:
+  group: build-kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost \
+            /usr/local/lib/android /opt/hostedtoolcache
+          sudo docker image prune -a -f
+          sudo apt-get clean
+          echo "=== Disk space ==="
+          df -h
+
+      - name: Create swap
+        run: |
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "=== Memory ==="
+          free -h
+
+      - name: Build sgl-kernel wheel
+        env:
+          CMAKE_BUILD_PARALLEL_LEVEL: "2"
+          NVCC_THREADS: "1"
+        run: |
+          cd sgl-kernel
+          chmod +x ./build.sh
+          # 如果用户指定了自定义 arch，覆盖 build.sh 中的默认值
+          export TORCH_CUDA_ARCH_LIST="${{ inputs.arch_list }}"
+          ./build.sh "${{ inputs.python_version }}" "${{ inputs.cuda_version }}"
+
+      - name: Upload sgl-kernel wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: sgl-kernel-cu${{ inputs.cuda_version }}-py${{ inputs.python_version }}
+          path: sgl-kernel/dist/*.whl
+          retention-days: 90
+
+      - name: Build sglang wheel
+        run: |
+          pip install build setuptools wheel
+          cd python
+          python -m build --wheel
+          
+      - name: Upload sglang wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: sglang-py${{ inputs.python_version }}
+          path: python/dist/*.whl
+          retention-days: 90
